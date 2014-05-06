@@ -57,6 +57,7 @@ Atom will automatically update when a new release is available.
 
   ```bat
   cd C:\Users\<user>\github\atom
+  npm install
   script/build
   ```
 
