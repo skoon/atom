@@ -1,5 +1,5 @@
-React = require 'react'
-{div} = require 'reactionary'
+React = require 'react-atom-fork'
+{div} = require 'reactionary-atom-fork'
 {isEqual, isEqualForProperties, multiplyString, toArray} = require 'underscore-plus'
 SubscriberMixin = require './subscriber-mixin'
 
@@ -33,7 +33,10 @@ GutterComponent = React.createClass
   # non-zero-delta change to the screen lines has occurred within the current
   # visible row range.
   shouldComponentUpdate: (newProps) ->
-    return true unless isEqualForProperties(newProps, @props, 'renderedRowRange', 'scrollTop', 'lineHeight', 'fontSize')
+    return true unless isEqualForProperties(newProps, @props,
+      'renderedRowRange', 'scrollTop', 'lineHeightInPixels', 'fontSize',
+      'mouseWheelScreenRow'
+    )
 
     {renderedRowRange, pendingChanges} = newProps
     for change in pendingChanges when Math.abs(change.screenDelta) > 0 or Math.abs(change.bufferDelta) > 0
@@ -47,7 +50,7 @@ GutterComponent = React.createClass
       @removeLineNumberNodes()
 
     @measureWidth() unless @lastMeasuredWidth? and isEqualForProperties(oldProps, @props, 'maxLineNumberDigits', 'fontSize', 'fontFamily')
-    @clearScreenRowCaches() unless oldProps.lineHeight is @props.lineHeight
+    @clearScreenRowCaches() unless oldProps.lineHeightInPixels is @props.lineHeightInPixels
     @updateLineNumbers()
 
   clearScreenRowCaches: ->
@@ -125,13 +128,13 @@ GutterComponent = React.createClass
 
   buildLineNumberHTML: (bufferRow, softWrapped, maxLineNumberDigits, screenRow) ->
     if screenRow?
-      {lineHeight} = @props
-      style = "position: absolute; top: #{screenRow * lineHeight}px;"
+      {lineHeightInPixels} = @props
+      style = "position: absolute; top: #{screenRow * lineHeightInPixels}px;"
     else
       style = "visibility: hidden;"
     innerHTML = @buildLineNumberInnerHTML(bufferRow, softWrapped, maxLineNumberDigits)
 
-    "<div class=\"line-number editor-colors\" style=\"#{style}\" data-screen-row=\"#{screenRow}\">#{innerHTML}</div>"
+    "<div class=\"line-number\" style=\"#{style}\" data-buffer-row=\"#{bufferRow}\" data-screen-row=\"#{screenRow}\">#{innerHTML}</div>"
 
   buildLineNumberInnerHTML: (bufferRow, softWrapped, maxLineNumberDigits) ->
     if softWrapped
@@ -145,8 +148,8 @@ GutterComponent = React.createClass
 
   updateLineNumberNode: (lineNumberId, screenRow) ->
     unless @screenRowsByLineNumberId[lineNumberId] is screenRow
-      {lineHeight} = @props
-      @lineNumberNodesById[lineNumberId].style.top = screenRow * lineHeight + 'px'
+      {lineHeightInPixels} = @props
+      @lineNumberNodesById[lineNumberId].style.top = screenRow * lineHeightInPixels + 'px'
       @lineNumberNodesById[lineNumberId].dataset.screenRow = screenRow
       @screenRowsByLineNumberId[lineNumberId] = screenRow
       @lineNumberIdsByScreenRow[screenRow] = lineNumberId

@@ -1,11 +1,13 @@
 {View, $} = require 'space-pen'
-React = require 'react'
+React = require 'react-atom-fork'
 EditorComponent = require './editor-component'
 {defaults} = require 'underscore-plus'
 
 module.exports =
 class ReactEditorView extends View
-  @content: -> @div class: 'editor react-wrapper'
+  # The `overlayer` class is included for backwards compatibility with
+  # context menus. It should be removed in v1.0.0
+  @content: -> @div class: 'editor react-wrapper overlayer'
 
   focusOnAttach: false
 
@@ -14,8 +16,10 @@ class ReactEditorView extends View
 
   getEditor: -> @editor
 
-  Object.defineProperty @::, 'lineHeight', get: -> @editor.getLineHeight()
+  Object.defineProperty @::, 'lineHeight', get: -> @editor.getLineHeightInPixels()
   Object.defineProperty @::, 'charWidth', get: -> @editor.getDefaultCharWidth()
+  Object.defineProperty @::, 'firstRenderedScreenRow', get: -> @component.getRenderedRowRange()[0]
+  Object.defineProperty @::, 'lastRenderedScreenRow', get: -> @component.getRenderedRowRange()[1]
 
   scrollTop: (scrollTop) ->
     if scrollTop?
@@ -50,7 +54,7 @@ class ReactEditorView extends View
       @gutter.find('.line-number').removeClass(klass)
 
     @gutter.addClassToLine = (bufferRow, klass) =>
-      lines = @gutter.find(".line-number-#{bufferRow}")
+      lines = @gutter.find("[data-buffer-row='#{bufferRow}']")
       lines.addClass(klass)
       lines.length > 0
 
@@ -82,3 +86,13 @@ class ReactEditorView extends View
       @component.onFocus()
     else
       @focusOnAttach = true
+
+  hide: ->
+    super
+    @component.hide()
+
+  show: ->
+    super
+    @component.show()
+
+  requestDisplayUpdate: -> # No-op shim for find-and-replace

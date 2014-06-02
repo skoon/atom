@@ -39,7 +39,7 @@ describe "EditorComponent", ->
       component.setLineHeight(1.3)
       component.setFontSize(20)
 
-      lineHeightInPixels = editor.getLineHeight()
+      lineHeightInPixels = editor.getLineHeightInPixels()
       charWidth = editor.getDefaultCharWidth()
       node = component.getDOMNode()
       verticalScrollbarNode = node.querySelector('.vertical-scrollbar')
@@ -47,7 +47,7 @@ describe "EditorComponent", ->
 
       node.style.height = editor.getLineCount() * lineHeightInPixels + 'px'
       node.style.width = '1000px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
 
   afterEach ->
     contentNode.style.width = ''
@@ -55,7 +55,7 @@ describe "EditorComponent", ->
   describe "line rendering", ->
     it "renders the currently-visible lines plus the overdraw margin", ->
       node.style.height = 4.5 * lineHeightInPixels + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
 
       linesNode = node.querySelector('.lines')
       expect(linesNode.style['-webkit-transform']).toBe "translate3d(0px, 0px, 0px)"
@@ -89,6 +89,88 @@ describe "EditorComponent", ->
       expect(component.lineNodeForScreenRow(2).offsetTop).toBe 2 * lineHeightInPixels
       expect(component.lineNodeForScreenRow(3).offsetTop).toBe 3 * lineHeightInPixels
       expect(component.lineNodeForScreenRow(4).offsetTop).toBe 4 * lineHeightInPixels
+
+    it "updates the top position of lines when the line height changes", ->
+      initialLineHeightInPixels = editor.getLineHeightInPixels()
+      component.setLineHeight(2)
+
+      newLineHeightInPixels = editor.getLineHeightInPixels()
+      expect(newLineHeightInPixels).not.toBe initialLineHeightInPixels
+      expect(component.lineNodeForScreenRow(1).offsetTop).toBe 1 * newLineHeightInPixels
+
+    it "updates the top position of lines when the font size changes", ->
+      initialLineHeightInPixels = editor.getLineHeightInPixels()
+      component.setFontSize(10)
+
+      newLineHeightInPixels = editor.getLineHeightInPixels()
+      expect(newLineHeightInPixels).not.toBe initialLineHeightInPixels
+      expect(component.lineNodeForScreenRow(1).offsetTop).toBe 1 * newLineHeightInPixels
+
+    it "updates the top position of lines when the font family changes", ->
+      # Can't find a font that changes the line height, but we think one might exist
+      linesComponent = component.refs.lines
+      spyOn(linesComponent, 'measureLineHeightInPixelsAndCharWidth').andCallFake -> editor.setLineHeightInPixels(10)
+
+      initialLineHeightInPixels = editor.getLineHeightInPixels()
+      component.setFontFamily('sans-serif')
+
+      expect(linesComponent.measureLineHeightInPixelsAndCharWidth).toHaveBeenCalled()
+      newLineHeightInPixels = editor.getLineHeightInPixels()
+      expect(newLineHeightInPixels).not.toBe initialLineHeightInPixels
+      expect(component.lineNodeForScreenRow(1).offsetTop).toBe 1 * newLineHeightInPixels
+
+    it "renders the .lines div at the full height of the editor if there aren't enough lines to scroll vertically", ->
+      editor.setText('')
+      node.style.height = '300px'
+      component.measureScrollView()
+
+      linesNode = node.querySelector('.lines')
+      expect(linesNode.offsetHeight).toBe 300
+
+    describe "when showInvisibles is enabled", ->
+      invisibles = null
+
+      beforeEach ->
+        invisibles =
+          eol: 'E'
+          space: 'S'
+          tab: 'T'
+          cr: 'C'
+
+        atom.config.set("editor.showInvisibles", true)
+        atom.config.set("editor.invisibles", invisibles)
+
+      it "re-renders the lines when the showInvisibles config option changes", ->
+        editor.setText " a line with tabs\tand spaces "
+
+        expect(component.lineNodeForScreenRow(0).textContent).toBe "#{invisibles.space}a line with tabs#{invisibles.tab} and spaces#{invisibles.space}#{invisibles.eol}"
+        atom.config.set("editor.showInvisibles", false)
+        expect(component.lineNodeForScreenRow(0).textContent).toBe " a line with tabs  and spaces "
+        atom.config.set("editor.showInvisibles", true)
+        expect(component.lineNodeForScreenRow(0).textContent).toBe "#{invisibles.space}a line with tabs#{invisibles.tab} and spaces#{invisibles.space}#{invisibles.eol}"
+
+      it "displays spaces, tabs, and newlines as visible characters", ->
+        editor.setText " a line with tabs\tand spaces "
+        expect(component.lineNodeForScreenRow(0).textContent).toBe "#{invisibles.space}a line with tabs#{invisibles.tab} and spaces#{invisibles.space}#{invisibles.eol}"
+
+      it "displays newlines as their own token outside of the other tokens' scopes", ->
+        editor.setText "var"
+        expect(component.lineNodeForScreenRow(0).innerHTML).toBe "<span class=\"source js\"><span class=\"storage modifier js\">var</span></span><span class=\"invisible-character\">#{invisibles.eol}</span>"
+
+      it "displays trailing carriage returns using a visible, non-empty value", ->
+        editor.setText "a line that ends with a carriage return\r\n"
+        expect(component.lineNodeForScreenRow(0).textContent).toBe "a line that ends with a carriage return#{invisibles.cr}#{invisibles.eol}"
+
+      describe "when soft wrapping is enabled", ->
+        beforeEach ->
+          editor.setText "a line that wraps "
+          editor.setSoftWrap(true)
+          node.style.width = 15 * charWidth + 'px'
+          component.measureScrollView()
+
+        it "doesn't show end of line invisibles at the end of wrapped lines", ->
+          expect(component.lineNodeForScreenRow(0).textContent).toBe "a line that "
+          expect(component.lineNodeForScreenRow(1).textContent).toBe "wraps#{invisibles.space}#{invisibles.eol}"
 
     describe "when indent guides are enabled", ->
       beforeEach ->
@@ -148,7 +230,7 @@ describe "EditorComponent", ->
   describe "gutter rendering", ->
     it "renders the currently-visible line numbers", ->
       node.style.height = 4.5 * lineHeightInPixels + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
 
       expect(node.querySelectorAll('.line-number').length).toBe 6 + 2 + 1 # line overdraw margin below + dummy line number
       expect(component.lineNumberNodeForScreenRow(0).textContent).toBe "#{nbsp}1"
@@ -188,7 +270,7 @@ describe "EditorComponent", ->
       editor.setSoftWrap(true)
       node.style.height = 4.5 * lineHeightInPixels + 'px'
       node.style.width = 30 * charWidth + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
 
       expect(node.querySelectorAll('.line-number').length).toBe 6 + lineOverdrawMargin + 1 # 1 dummy line node
       expect(component.lineNumberNodeForScreenRow(0).textContent).toBe "#{nbsp}1"
@@ -227,7 +309,7 @@ describe "EditorComponent", ->
 
       node.style.height = 4.5 * lineHeightInPixels + 'px'
       node.style.width = 20 * lineHeightInPixels + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
 
       cursorNodes = node.querySelectorAll('.cursor')
       expect(cursorNodes.length).toBe 1
@@ -292,25 +374,6 @@ describe "EditorComponent", ->
       advanceClock(component.props.cursorBlinkResumeDelay)
       advanceClock(component.props.cursorBlinkPeriod / 2)
       expect(cursorsNode.classList.contains('blink-off')).toBe true
-
-    it "renders the hidden input field at the position of the last cursor if it is on screen", ->
-      inputNode = node.querySelector('.hidden-input')
-      node.style.height = 5 * lineHeightInPixels + 'px'
-      node.style.width = 10 * charWidth + 'px'
-      component.measureHeightAndWidth()
-
-      expect(editor.getCursorScreenPosition()).toEqual [0, 0]
-      editor.setScrollTop(3 * lineHeightInPixels)
-      editor.setScrollLeft(3 * charWidth)
-      expect(inputNode.offsetTop).toBe 0
-      expect(inputNode.offsetLeft).toBe 0
-
-      editor.setCursorBufferPosition([5, 5])
-      cursorRect = editor.getCursor().getPixelRect()
-      cursorTop = cursorRect.top
-      cursorLeft = cursorRect.left
-      expect(inputNode.offsetTop).toBe cursorTop - editor.getScrollTop()
-      expect(inputNode.offsetLeft).toBe cursorLeft - editor.getScrollLeft()
 
     it "does not render cursors that are associated with non-empty selections", ->
       editor.setSelectedScreenRange([[0, 4], [4, 6]])
@@ -386,6 +449,48 @@ describe "EditorComponent", ->
 
       expect(node.querySelectorAll('.selection').length).toBe 1
 
+  describe "hidden input field", ->
+    it "renders the hidden input field at the position of the last cursor if the cursor is on screen and the editor is focused", ->
+      editor.setVerticalScrollMargin(0)
+      editor.setHorizontalScrollMargin(0)
+
+      inputNode = node.querySelector('.hidden-input')
+      node.style.height = 5 * lineHeightInPixels + 'px'
+      node.style.width = 10 * charWidth + 'px'
+      component.measureScrollView()
+
+      expect(editor.getCursorScreenPosition()).toEqual [0, 0]
+      editor.setScrollTop(3 * lineHeightInPixels)
+      editor.setScrollLeft(3 * charWidth)
+
+      expect(inputNode.offsetTop).toBe 0
+      expect(inputNode.offsetLeft).toBe 0
+
+      # In bounds, not focused
+      editor.setCursorBufferPosition([5, 4])
+      expect(inputNode.offsetTop).toBe 0
+      expect(inputNode.offsetLeft).toBe 0
+
+      # In bounds and focused
+      inputNode.focus()
+      expect(inputNode.offsetTop).toBe (5 * lineHeightInPixels) - editor.getScrollTop()
+      expect(inputNode.offsetLeft).toBe (4 * charWidth) - editor.getScrollLeft()
+
+      # In bounds, not focused
+      inputNode.blur()
+      expect(inputNode.offsetTop).toBe 0
+      expect(inputNode.offsetLeft).toBe 0
+
+      # Out of bounds, not focused
+      editor.setCursorBufferPosition([1, 2])
+      expect(inputNode.offsetTop).toBe 0
+      expect(inputNode.offsetLeft).toBe 0
+
+      # Out of bounds, focused
+      inputNode.focus()
+      expect(inputNode.offsetTop).toBe 0
+      expect(inputNode.offsetLeft).toBe 0
+
   describe "mouse interactions", ->
     linesNode = null
 
@@ -398,7 +503,7 @@ describe "EditorComponent", ->
         it "moves the cursor to the nearest screen position", ->
           node.style.height = 4.5 * lineHeightInPixels + 'px'
           node.style.width = 10 * charWidth + 'px'
-          component.measureHeightAndWidth()
+          component.measureScrollView()
           editor.setScrollTop(3.5 * lineHeightInPixels)
           editor.setScrollLeft(2 * charWidth)
 
@@ -511,7 +616,7 @@ describe "EditorComponent", ->
   describe "scrolling", ->
     it "updates the vertical scrollbar when the scrollTop is changed in the model", ->
       node.style.height = 4.5 * lineHeightInPixels + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
 
       expect(verticalScrollbarNode.scrollTop).toBe 0
 
@@ -520,7 +625,7 @@ describe "EditorComponent", ->
 
     it "updates the horizontal scrollbar and the x transform of the lines based on the scrollLeft of the model", ->
       node.style.width = 30 * charWidth + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
 
       linesNode = node.querySelector('.lines')
       expect(linesNode.style['-webkit-transform']).toBe "translate3d(0px, 0px, 0px)"
@@ -532,7 +637,7 @@ describe "EditorComponent", ->
 
     it "updates the scrollLeft of the model when the scrollLeft of the horizontal scrollbar changes", ->
       node.style.width = 30 * charWidth + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
 
       expect(editor.getScrollLeft()).toBe 0
       horizontalScrollbarNode.scrollLeft = 100
@@ -543,7 +648,7 @@ describe "EditorComponent", ->
     it "does not obscure the last line with the horizontal scrollbar", ->
       node.style.height = 4.5 * lineHeightInPixels + 'px'
       node.style.width = 10 * charWidth + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
       editor.setScrollBottom(editor.getScrollHeight())
       lastLineNode = component.lineNodeForScreenRow(editor.getLastScreenRow())
       bottomOfLastLine = lastLineNode.getBoundingClientRect().bottom
@@ -552,7 +657,7 @@ describe "EditorComponent", ->
 
       # Scroll so there's no space below the last line when the horizontal scrollbar disappears
       node.style.width = 100 * charWidth + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
       bottomOfLastLine = lastLineNode.getBoundingClientRect().bottom
       bottomOfEditor = node.getBoundingClientRect().bottom
       expect(bottomOfLastLine).toBe bottomOfEditor
@@ -560,7 +665,7 @@ describe "EditorComponent", ->
     it "does not obscure the last character of the longest line with the vertical scrollbar", ->
       node.style.height = 7 * lineHeightInPixels + 'px'
       node.style.width = 10 * charWidth + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
 
       editor.setScrollLeft(Infinity)
 
@@ -574,19 +679,19 @@ describe "EditorComponent", ->
 
       node.style.height = 4.5 * lineHeightInPixels + 'px'
       node.style.width = '1000px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
 
       expect(verticalScrollbarNode.style.display).toBe ''
       expect(horizontalScrollbarNode.style.display).toBe 'none'
 
       node.style.width = 10 * charWidth + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
 
       expect(verticalScrollbarNode.style.display).toBe ''
       expect(horizontalScrollbarNode.style.display).toBe ''
 
       node.style.height = 20 * lineHeightInPixels + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
 
       expect(verticalScrollbarNode.style.display).toBe 'none'
       expect(horizontalScrollbarNode.style.display).toBe ''
@@ -594,7 +699,7 @@ describe "EditorComponent", ->
     it "makes the dummy scrollbar divs only as tall/wide as the actual scrollbars", ->
       node.style.height = 4 * lineHeightInPixels + 'px'
       node.style.width = 10 * charWidth + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
 
       atom.themes.applyStylesheet "test", """
         ::-webkit-scrollbar {
@@ -617,19 +722,19 @@ describe "EditorComponent", ->
 
       node.style.height = 4.5 * lineHeightInPixels + 'px'
       node.style.width = '1000px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
       expect(verticalScrollbarNode.style.bottom).toBe ''
       expect(horizontalScrollbarNode.style.right).toBe verticalScrollbarNode.offsetWidth + 'px'
       expect(scrollbarCornerNode.style.display).toBe 'none'
 
       node.style.width = 10 * charWidth + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
       expect(verticalScrollbarNode.style.bottom).toBe horizontalScrollbarNode.offsetHeight + 'px'
       expect(horizontalScrollbarNode.style.right).toBe verticalScrollbarNode.offsetWidth + 'px'
       expect(scrollbarCornerNode.style.display).toBe ''
 
       node.style.height = 20 * lineHeightInPixels + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
       expect(verticalScrollbarNode.style.bottom).toBe horizontalScrollbarNode.offsetHeight + 'px'
       expect(horizontalScrollbarNode.style.right).toBe ''
       expect(scrollbarCornerNode.style.display).toBe 'none'
@@ -637,52 +742,97 @@ describe "EditorComponent", ->
     it "accounts for the width of the gutter in the scrollWidth of the horizontal scrollbar", ->
       gutterNode = node.querySelector('.gutter')
       node.style.width = 10 * charWidth + 'px'
-      component.measureHeightAndWidth()
+      component.measureScrollView()
 
       expect(horizontalScrollbarNode.scrollWidth).toBe gutterNode.offsetWidth + editor.getScrollWidth()
 
     describe "when a mousewheel event occurs on the editor", ->
-      it "updates the horizontal or vertical scrollbar depending on which delta is greater (x or y)", ->
+
+  describe "mousewheel events", ->
+    it "updates the scrollLeft or scrollTop on mousewheel events depending on which delta is greater (x or y)", ->
+      node.style.height = 4.5 * lineHeightInPixels + 'px'
+      node.style.width = 20 * charWidth + 'px'
+      component.measureScrollView()
+
+      expect(verticalScrollbarNode.scrollTop).toBe 0
+      expect(horizontalScrollbarNode.scrollLeft).toBe 0
+
+      node.dispatchEvent(new WheelEvent('mousewheel', wheelDeltaX: -5, wheelDeltaY: -10))
+      expect(verticalScrollbarNode.scrollTop).toBe 10
+      expect(horizontalScrollbarNode.scrollLeft).toBe 0
+
+      node.dispatchEvent(new WheelEvent('mousewheel', wheelDeltaX: -15, wheelDeltaY: -5))
+      expect(verticalScrollbarNode.scrollTop).toBe 10
+      expect(horizontalScrollbarNode.scrollLeft).toBe 15
+
+    describe "when the mousewheel event's target is a line", ->
+      it "keeps the line on the DOM if it is scrolled off-screen", ->
         node.style.height = 4.5 * lineHeightInPixels + 'px'
         node.style.width = 20 * charWidth + 'px'
-        component.measureHeightAndWidth()
+        component.measureScrollView()
 
-        expect(verticalScrollbarNode.scrollTop).toBe 0
-        expect(horizontalScrollbarNode.scrollLeft).toBe 0
+        lineNode = node.querySelector('.line')
+        wheelEvent = new WheelEvent('mousewheel', wheelDeltaX: 0, wheelDeltaY: -500)
+        Object.defineProperty(wheelEvent, 'target', get: -> lineNode)
+        node.dispatchEvent(wheelEvent)
 
-        node.dispatchEvent(new WheelEvent('mousewheel', wheelDeltaX: -5, wheelDeltaY: -10))
-        expect(verticalScrollbarNode.scrollTop).toBe 10
-        expect(horizontalScrollbarNode.scrollLeft).toBe 0
+        expect(node.contains(lineNode)).toBe true
 
-        node.dispatchEvent(new WheelEvent('mousewheel', wheelDeltaX: -15, wheelDeltaY: -5))
-        expect(verticalScrollbarNode.scrollTop).toBe 10
-        expect(horizontalScrollbarNode.scrollLeft).toBe 15
+      it "does not set the mouseWheelScreenRow if scrolling horizontally", ->
+        node.style.height = 4.5 * lineHeightInPixels + 'px'
+        node.style.width = 20 * charWidth + 'px'
+        component.measureScrollView()
 
-      describe "when the mousewheel event's target is a line", ->
-        it "keeps the line on the DOM if it is scrolled off-screen", ->
-          node.style.height = 4.5 * lineHeightInPixels + 'px'
-          node.style.width = 20 * charWidth + 'px'
-          component.measureHeightAndWidth()
+        lineNode = node.querySelector('.line')
+        wheelEvent = new WheelEvent('mousewheel', wheelDeltaX: 10, wheelDeltaY: 0)
+        Object.defineProperty(wheelEvent, 'target', get: -> lineNode)
+        node.dispatchEvent(wheelEvent)
 
-          lineNode = node.querySelector('.line')
-          wheelEvent = new WheelEvent('mousewheel', wheelDeltaX: 0, wheelDeltaY: -500)
-          Object.defineProperty(wheelEvent, 'target', get: -> lineNode)
-          node.dispatchEvent(wheelEvent)
+        expect(component.mouseWheelScreenRow).toBe null
 
-          expect(node.contains(lineNode)).toBe true
+      it "clears the mouseWheelScreenRow after a delay even if the event does not cause scrolling", ->
+        spyOn(_._, 'now').andCallFake -> window.now # Ensure _.debounce is based on our fake spec timeline
 
-      describe "when the mousewheel event's target is a line number", ->
-        it "keeps the line number on the DOM if it is scrolled off-screen", ->
-          node.style.height = 4.5 * lineHeightInPixels + 'px'
-          node.style.width = 20 * charWidth + 'px'
-          component.measureHeightAndWidth()
+        expect(editor.getScrollTop()).toBe 0
 
-          lineNumberNode = node.querySelectorAll('.line-number')[1]
-          wheelEvent = new WheelEvent('mousewheel', wheelDeltaX: 0, wheelDeltaY: -500)
-          Object.defineProperty(wheelEvent, 'target', get: -> lineNumberNode)
-          node.dispatchEvent(wheelEvent)
+        lineNode = node.querySelector('.line')
+        wheelEvent = new WheelEvent('mousewheel', wheelDeltaX: 0, wheelDeltaY: 10)
+        Object.defineProperty(wheelEvent, 'target', get: -> lineNode)
+        node.dispatchEvent(wheelEvent)
 
-          expect(node.contains(lineNumberNode)).toBe true
+        expect(editor.getScrollTop()).toBe 0
+
+        expect(component.mouseWheelScreenRow).toBe 0
+        advanceClock(component.mouseWheelScreenRowClearDelay)
+        expect(component.mouseWheelScreenRow).toBe null
+
+      it "does not preserve the line if it is on screen", ->
+        expect(node.querySelectorAll('.line-number').length).toBe 14 # dummy line
+        lineNodes = node.querySelectorAll('.line')
+        expect(lineNodes.length).toBe 13
+        lineNode = lineNodes[0]
+
+        wheelEvent = new WheelEvent('mousewheel', wheelDeltaX: 0, wheelDeltaY: 100) # goes nowhere, we're already at scrollTop 0
+        Object.defineProperty(wheelEvent, 'target', get: -> lineNode)
+        node.dispatchEvent(wheelEvent)
+
+        expect(component.mouseWheelScreenRow).toBe 0
+        editor.insertText("hello")
+        expect(node.querySelectorAll('.line-number').length).toBe 14 # dummy line
+        expect(node.querySelectorAll('.line').length).toBe 13
+
+    describe "when the mousewheel event's target is a line number", ->
+      it "keeps the line number on the DOM if it is scrolled off-screen", ->
+        node.style.height = 4.5 * lineHeightInPixels + 'px'
+        node.style.width = 20 * charWidth + 'px'
+        component.measureScrollView()
+
+        lineNumberNode = node.querySelectorAll('.line-number')[1]
+        wheelEvent = new WheelEvent('mousewheel', wheelDeltaX: 0, wheelDeltaY: -500)
+        Object.defineProperty(wheelEvent, 'target', get: -> lineNumberNode)
+        node.dispatchEvent(wheelEvent)
+
+        expect(node.contains(lineNumberNode)).toBe true
 
   describe "input events", ->
     inputNode = null
@@ -719,3 +869,33 @@ describe "EditorComponent", ->
 
         expect(editor.consolidateSelections).toHaveBeenCalled()
         expect(event.abortKeyBinding).toHaveBeenCalled()
+
+  describe "hiding and showing the editor", ->
+    describe "when fontSize, fontFamily, or lineHeight changes while the editor is hidden", ->
+      it "does not attempt to measure the lineHeight and defaultCharWidth until the editor becomes visible again", ->
+        wrapperView.hide()
+        initialLineHeightInPixels = editor.getLineHeightInPixels()
+        initialCharWidth = editor.getDefaultCharWidth()
+
+        component.setLineHeight(2)
+        expect(editor.getLineHeightInPixels()).toBe initialLineHeightInPixels
+        expect(editor.getDefaultCharWidth()).toBe initialCharWidth
+        component.setFontSize(22)
+        expect(editor.getLineHeightInPixels()).toBe initialLineHeightInPixels
+        expect(editor.getDefaultCharWidth()).toBe initialCharWidth
+        component.setFontFamily('monospace')
+        expect(editor.getLineHeightInPixels()).toBe initialLineHeightInPixels
+        expect(editor.getDefaultCharWidth()).toBe initialCharWidth
+
+        wrapperView.show()
+        expect(editor.getLineHeightInPixels()).not.toBe initialLineHeightInPixels
+        expect(editor.getDefaultCharWidth()).not.toBe initialCharWidth
+
+    describe "when lines are changed while the editor is hidden", ->
+      it "does not measure new characters until the editor is shown again", ->
+        editor.setText('')
+        wrapperView.hide()
+        editor.setText('var z = 1')
+        editor.setCursorBufferPosition([0, Infinity])
+        wrapperView.show()
+        expect(node.querySelector('.cursor').style['-webkit-transform']).toBe "translate3d(#{9 * charWidth}px, 0px, 0px)"
