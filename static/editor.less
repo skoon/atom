@@ -17,10 +17,15 @@
   }
 
   .cursor {
-    z-index: 2;
+    z-index: 4;
+    pointer-events: none;
   }
 
-  &.is-focused .cursors.blink-off .cursor {
+  .editor-contents.is-focused .cursor {
+    visibility: visible;
+  }
+
+  .cursors.blink-off .cursor {
     visibility: hidden;
   }
 
@@ -64,17 +69,19 @@
   .gutter {
     .line-number {
       white-space: nowrap;
-      padding: 0 .5em;
+      padding-left: .5em;
 
       .icon-right {
-        padding: 0;
-        padding-left: .1em;
+        padding: 0 .4em;
+        &:before {
+          text-align: center;
+        }
       }
     }
   }
 }
 
-.editor {
+.editor, .editor-contents {
   overflow: hidden;
   cursor: text;
   display: -webkit-flex;
@@ -116,7 +123,7 @@
   visibility: hidden;
   padding-left: .1em;
   padding-right: .5em;
-  opacity: .7;
+  opacity: .6;
 }
 
 .editor .gutter:hover .line-number.foldable .icon-right {

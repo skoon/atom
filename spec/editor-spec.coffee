@@ -863,6 +863,30 @@ describe "Editor", ->
         expect(selection1.getScreenRange()).toEqual [[3, 0], [4, 5]]
         expect(selection2.getScreenRange()).toEqual [[5, 6], [6, 2]]
 
+    describe ".selectToBeginningOfNextParagraph()", ->
+      it "selects from the cursor to first line of the next paragraph", ->
+        editor.setSelectedBufferRange([[3, 0], [4, 5]])
+        editor.addCursorAtScreenPosition([5, 6])
+        editor.selectToScreenPosition([6, 2])
+
+        editor.selectToBeginningOfNextParagraph()
+
+        selections = editor.getSelections()
+        expect(selections.length).toBe 1
+        expect(selections[0].getScreenRange()).toEqual [[3, 0], [10, 0]]
+
+    describe ".selectToBeginningOfPreviousParagraph()", ->
+      it "selects from the cursor to the first line of the pevious paragraph", ->
+        editor.setSelectedBufferRange([[3, 0], [4, 5]])
+        editor.addCursorAtScreenPosition([5, 6])
+        editor.selectToScreenPosition([6, 2])
+
+        editor.selectToBeginningOfPreviousParagraph()
+
+        selections = editor.getSelections()
+        expect(selections.length).toBe 1
+        expect(selections[0].getScreenRange()).toEqual [[0, 0], [5, 6]]
+
       it "merges selections if they intersect, maintaining the directionality of the last selection", ->
         editor.setCursorScreenPosition([4, 10])
         editor.selectToScreenPosition([5, 27])
@@ -1622,7 +1646,7 @@ describe "Editor", ->
         editor.setCursorBufferPosition([9,2])
         editor.insertNewline()
         expect(editor.lineForBufferRow(10)).toBe '  };'
-        
+
     describe ".backspace()", ->
       describe "when there is a single cursor", ->
         changeScreenRangeHandler = null
@@ -2233,6 +2257,15 @@ describe "Editor", ->
           expect(buffer.lineForRow(0)).toBe " var quicksort = function () {"
           editor.outdentSelectedRows()
           expect(buffer.lineForRow(0)).toBe "var quicksort = function () {"
+
+        it "outdents only up to the first non-space non-tab character", ->
+          editor.insertText(' \tfoo\t ')
+          editor.outdentSelectedRows()
+          expect(buffer.lineForRow(0)).toBe "\tfoo\t var quicksort = function () {"
+          editor.outdentSelectedRows()
+          expect(buffer.lineForRow(0)).toBe "foo\t var quicksort = function () {"
+          editor.outdentSelectedRows()
+          expect(buffer.lineForRow(0)).toBe "foo\t var quicksort = function () {"
 
       describe "when one line is selected", ->
         it "outdents line and retains editor", ->
@@ -3187,21 +3220,137 @@ describe "Editor", ->
       expect(editor.getScrollRight()).toBe (9 + editor.getHorizontalScrollMargin()) * 10
 
   describe ".pageUp/Down()", ->
-    it "scrolls one screen height up or down", ->
+    it "scrolls one screen height up or down and moves the cursor one page length", ->
       editor.manageScrollPosition = true
 
       editor.setLineHeightInPixels(10)
       editor.setHeight(50)
       expect(editor.getScrollHeight()).toBe 130
+      expect(editor.getCursorBufferPosition().row).toBe 0
 
       editor.pageDown()
       expect(editor.getScrollTop()).toBe 50
+      expect(editor.getCursorBufferPosition().row).toBe 5
 
       editor.pageDown()
       expect(editor.getScrollTop()).toBe 80
+      expect(editor.getCursorBufferPosition().row).toBe 10
 
       editor.pageUp()
       expect(editor.getScrollTop()).toBe 30
+      expect(editor.getCursorBufferPosition().row).toBe 5
 
       editor.pageUp()
       expect(editor.getScrollTop()).toBe 0
+      expect(editor.getCursorBufferPosition().row).toBe 0
+
+  describe "decorations", ->
+    decoration = null
+    beforeEach ->
+      decoration = {type: 'gutter', class: 'one'}
+
+    it "can add decorations to buffer rows and remove them", ->
+      editor.addDecorationToBufferRow(2, decoration)
+      editor.addDecorationToBufferRow(2, decoration)
+
+      decorations = editor.decorationsForBufferRow(2)
+      expect(decorations).toHaveLength 1
+      expect(decorations).toContain decoration
+
+      editor.removeDecorationFromBufferRow(2, decoration)
+      decorations = editor.decorationsForBufferRow(2)
+      expect(decorations).toHaveLength 0
+
+    it "can add decorations to buffer row ranges and remove them", ->
+      editor.addDecorationToBufferRowRange(2, 4, decoration)
+      expect(editor.decorationsForBufferRow 2).toContain decoration
+      expect(editor.decorationsForBufferRow 3).toContain decoration
+      expect(editor.decorationsForBufferRow 4).toContain decoration
+
+      editor.removeDecorationFromBufferRowRange(3, 5, decoration)
+      expect(editor.decorationsForBufferRow 2).toContain decoration
+      expect(editor.decorationsForBufferRow 3).not.toContain decoration
+      expect(editor.decorationsForBufferRow 4).not.toContain decoration
+
+    it "can add decorations associated with markers and remove them", ->
+      marker = editor.displayBuffer.markBufferRange([[2, 13], [3, 15]], class: 'my-marker', invalidate: 'inside')
+
+      editor.addDecorationForMarker(marker, decoration)
+      expect(editor.decorationsForBufferRow 1).not.toContain decoration
+      expect(editor.decorationsForBufferRow 2).toContain decoration
+      expect(editor.decorationsForBufferRow 3).toContain decoration
+      expect(editor.decorationsForBufferRow 4).not.toContain decoration
+
+      editor.getBuffer().insert([0, 0], '\n')
+      expect(editor.decorationsForBufferRow 2).not.toContain decoration
+      expect(editor.decorationsForBufferRow 3).toContain decoration
+      expect(editor.decorationsForBufferRow 4).toContain decoration
+      expect(editor.decorationsForBufferRow 5).not.toContain decoration
+
+      editor.getBuffer().insert([4, 2], 'n')
+      expect(editor.decorationsForBufferRow 2).not.toContain decoration
+      expect(editor.decorationsForBufferRow 3).not.toContain decoration
+      expect(editor.decorationsForBufferRow 4).not.toContain decoration
+      expect(editor.decorationsForBufferRow 5).not.toContain decoration
+
+      editor.getBuffer().undo()
+      expect(editor.decorationsForBufferRow 2).not.toContain decoration
+      expect(editor.decorationsForBufferRow 3).toContain decoration
+      expect(editor.decorationsForBufferRow 4).toContain decoration
+      expect(editor.decorationsForBufferRow 5).not.toContain decoration
+
+      editor.removeDecorationForMarker(marker, decoration)
+      expect(editor.decorationsForBufferRow 2).not.toContain decoration
+      expect(editor.decorationsForBufferRow 3).not.toContain decoration
+      expect(editor.decorationsForBufferRow 4).not.toContain decoration
+      expect(editor.decorationsForBufferRow 5).not.toContain decoration
+
+    describe "decorationsForBufferRow", ->
+      one = {type: 'one', class: 'one'}
+      two = {type: 'two', class: 'two'}
+      typeless = {class: 'typeless'}
+
+      beforeEach ->
+        editor.addDecorationToBufferRow(2, one)
+        editor.addDecorationToBufferRow(2, two)
+        editor.addDecorationToBufferRow(2, typeless)
+
+      it "returns all decorations with no decorationType specified", ->
+        decorations = editor.decorationsForBufferRow(2)
+        expect(decorations).toContain one
+        expect(decorations).toContain two
+        expect(decorations).toContain typeless
+
+      it "returns typeless decorations with all decorationTypes", ->
+        decorations = editor.decorationsForBufferRow(2, 'one')
+        expect(decorations).toContain one
+        expect(decorations).not.toContain two
+        expect(decorations).toContain typeless
+
+    describe "decorationsForBufferRowRange", ->
+      one = {type: 'one', class: 'one'}
+      two = {type: 'two', class: 'two'}
+      typeless = {class: 'typeless'}
+
+      it "returns an object of decorations based on the decorationType", ->
+        editor.addDecorationToBufferRow(2, one)
+        editor.addDecorationToBufferRow(3, one)
+        editor.addDecorationToBufferRow(5, one)
+
+        editor.addDecorationToBufferRow(3, two)
+        editor.addDecorationToBufferRow(4, two)
+
+        editor.addDecorationToBufferRow(3, typeless)
+        editor.addDecorationToBufferRow(5, typeless)
+
+        decorations = editor.decorationsForBufferRowRange(2, 5, 'one')
+        expect(decorations[2]).toContain one
+
+        expect(decorations[3]).toContain one
+        expect(decorations[3]).not.toContain two
+        expect(decorations[3]).toContain typeless
+
+        expect(decorations[4]).toHaveLength 0
+
+        expect(decorations[5]).toContain one
+        expect(decorations[5]).toContain typeless

@@ -43,6 +43,8 @@ class DisplayBuffer extends Model
     @charWidthsByScope = {}
     @markers = {}
     @foldsByMarkerId = {}
+    @decorations = {}
+    @decorationMarkerSubscriptions = {}
     @updateAllScreenLines()
     @createFoldForMarker(marker) for marker in @buffer.findMarkers(@getFoldMarkerAttributes())
     @subscribe @tokenizedBuffer, 'grammar-changed', (grammar) => @emit 'grammar-changed', grammar
@@ -228,8 +230,7 @@ class DisplayBuffer extends Model
     @charWidthsByScope = {}
 
   getScrollHeight: ->
-    unless @getLineHeightInPixels() > 0
-      throw new Error("You must assign lineHeightInPixels before calling ::getScrollHeight()")
+    return 0 unless @getLineHeightInPixels() > 0
 
     @getLineCount() * @getLineHeightInPixels()
 
@@ -237,8 +238,7 @@ class DisplayBuffer extends Model
     (@getMaxLineLength() * @getDefaultCharWidth()) + @getCursorWidth()
 
   getVisibleRowRange: ->
-    unless @getLineHeightInPixels() > 0
-      throw new Error("You must assign a non-zero lineHeightInPixels before calling ::getVisibleRowRange()")
+    return [0, 0] unless @getLineHeightInPixels() > 0
 
     heightInLines = Math.ceil(@getHeight() / @getLineHeightInPixels()) + 1
     startRow = Math.floor(@getScrollTop() / @getLineHeightInPixels())
@@ -289,9 +289,9 @@ class DisplayBuffer extends Model
       height = (screenRange.end.row - screenRange.start.row + 1) * @getLineHeightInPixels()
       width = @getScrollWidth()
     else
-      {top, left} = @pixelPositionForScreenPosition(screenRange.start)
+      {top, left} = @pixelPositionForScreenPosition(screenRange.start, false)
       height = @getLineHeightInPixels()
-      width = @pixelPositionForScreenPosition(screenRange.end).left - left
+      width = @pixelPositionForScreenPosition(screenRange.end, false).left - left
 
     {top, left, width, height}
 
@@ -520,7 +520,7 @@ class DisplayBuffer extends Model
       charWidths = @getScopedCharWidths(token.scopes)
       for char in token.value
         return {top, left} if column is targetColumn
-        left += charWidths[char] ? defaultCharWidth
+        left += charWidths[char] ? defaultCharWidth unless char is '\0'
         column++
     {top, left}
 
@@ -717,6 +717,97 @@ class DisplayBuffer extends Model
   # Returns a {Range}.
   rangeForAllLines: ->
     new Range([0, 0], @clipScreenPosition([Infinity, Infinity]))
+
+  decorationsForBufferRow: (bufferRow, decorationType) ->
+    decorations = @decorations[bufferRow] ? []
+    decorations = (dec for dec in decorations when not dec.type? or dec.type is decorationType) if decorationType?
+    decorations
+
+  decorationsForBufferRowRange: (startBufferRow, endBufferRow, decorationType) ->
+    decorations = {}
+    for bufferRow in [startBufferRow..endBufferRow]
+      decorations[bufferRow] = @decorationsForBufferRow(bufferRow, decorationType)
+    decorations
+
+  addDecorationToBufferRow: (bufferRow, decoration) ->
+    @decorations[bufferRow] ?= []
+    for current in @decorations[bufferRow]
+      return if _.isEqual(current, decoration)
+    @decorations[bufferRow].push(decoration)
+    @emit 'decoration-changed', {bufferRow, decoration, action: 'add'}
+
+  removeDecorationFromBufferRow: (bufferRow, decorationPattern) ->
+    return unless decorations = @decorations[bufferRow]
+
+    removed = []
+    i = decorations.length - 1
+    while i >= 0
+      if @decorationMatchesPattern(decorations[i], decorationPattern)
+        removed.push decorations[i]
+        decorations.splice(i, 1)
+      i--
+
+    delete @decorations[bufferRow] unless @decorations[bufferRow]?
+
+    for decoration in removed
+      @emit 'decoration-changed', {bufferRow, decoration, action: 'remove'}
+
+    removed
+
+  addDecorationToBufferRowRange: (startBufferRow, endBufferRow, decoration) ->
+    for bufferRow in [startBufferRow..endBufferRow]
+      @addDecorationToBufferRow(bufferRow, decoration)
+    return
+
+  removeDecorationFromBufferRowRange: (startBufferRow, endBufferRow, decoration) ->
+    for bufferRow in [startBufferRow..endBufferRow]
+      @removeDecorationFromBufferRow(bufferRow, decoration)
+    return
+
+  decorationMatchesPattern: (decoration, decorationPattern) ->
+    return false unless decoration? and decorationPattern?
+    for key, value of decorationPattern
+      return false if decoration[key] != value
+    true
+
+  addDecorationForMarker: (marker, decoration) ->
+    startRow = marker.getStartBufferPosition().row
+    endRow = marker.getEndBufferPosition().row
+    @addDecorationToBufferRowRange(startRow, endRow, decoration)
+
+    changedSubscription = @subscribe marker, 'changed', (e) =>
+      oldStartRow = e.oldHeadBufferPosition.row
+      oldEndRow = e.oldTailBufferPosition.row
+      newStartRow = e.newHeadBufferPosition.row
+      newEndRow = e.newTailBufferPosition.row
+
+      # swap so head is always <= than tail
+      [oldEndRow, oldStartRow] = [oldStartRow, oldEndRow] if oldStartRow > oldEndRow
+      [newEndRow, newStartRow] = [newStartRow, newEndRow] if newStartRow > newEndRow
+
+      @removeDecorationFromBufferRowRange(oldStartRow, oldEndRow, decoration)
+      @addDecorationToBufferRowRange(newStartRow, newEndRow, decoration) if e.isValid
+
+    destroyedSubscription = @subscribe marker, 'destroyed', (e) =>
+      @removeDecorationForMarker(marker, decoration)
+
+    @decorationMarkerSubscriptions[marker.id] ?= []
+    @decorationMarkerSubscriptions[marker.id].push {decoration, changedSubscription, destroyedSubscription}
+
+  removeDecorationForMarker: (marker, decorationPattern) ->
+    return unless @decorationMarkerSubscriptions[marker.id]?
+
+    startRow = marker.getStartBufferPosition().row
+    endRow = marker.getEndBufferPosition().row
+    @removeDecorationFromBufferRowRange(startRow, endRow, decorationPattern)
+
+    for subscription in _.clone(@decorationMarkerSubscriptions[marker.id])
+      if @decorationMatchesPattern(subscription.decoration, decorationPattern)
+        subscription.changedSubscription.off()
+        subscription.destroyedSubscription.off()
+        @decorationMarkerSubscriptions[marker.id] = _.without(@decorationMarkerSubscriptions[marker.id], subscription)
+
+    return
 
   # Retrieves a {DisplayBufferMarker} based on its id.
   #
@@ -961,6 +1052,8 @@ class DisplayBuffer extends Model
     @emit 'marker-created', @getMarker(marker.id)
 
   createFoldForMarker: (marker) ->
+    bufferMarker = new DisplayBufferMarker({bufferMarker: marker, displayBuffer: this})
+    @addDecorationForMarker(bufferMarker, type: 'gutter', class: 'folded')
     new Fold(this, marker)
 
   foldForMarker: (marker) ->

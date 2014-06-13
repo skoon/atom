@@ -33,22 +33,24 @@ EditorComponent = React.createClass
   pendingHorizontalScrollDelta: 0
   mouseWheelScreenRow: null
   mouseWheelScreenRowClearDelay: 150
+  scrollSensitivity: 0.4
   scrollViewMeasurementRequested: false
-  overflowChangedEventsPaused: false
-  overflowChangedWhilePaused: false
   measureLineHeightAndDefaultCharWidthWhenShown: false
+  inputEnabled: true
 
   render: ->
     {focused, fontSize, lineHeight, fontFamily, showIndentGuide, showInvisibles, visible} = @state
     {editor, cursorBlinkPeriod, cursorBlinkResumeDelay} = @props
-    maxLineNumberDigits = editor.getScreenLineCount().toString().length
+    maxLineNumberDigits = editor.getLineCount().toString().length
     invisibles = if showInvisibles then @state.invisibles else {}
+    hasSelection = editor.getSelection()? and !editor.getSelection().isEmpty()
 
     if @isMounted()
       renderedRowRange = @getRenderedRowRange()
       [renderedStartRow, renderedEndRow] = renderedRowRange
       cursorScreenRanges = @getCursorScreenRanges(renderedRowRange)
       selectionScreenRanges = @getSelectionScreenRanges(renderedRowRange)
+      decorations = @getGutterDecorations(renderedRowRange)
       scrollHeight = editor.getScrollHeight()
       scrollWidth = editor.getScrollWidth()
       scrollTop = editor.getScrollTop()
@@ -65,13 +67,15 @@ EditorComponent = React.createClass
       if @mouseWheelScreenRow? and not (renderedStartRow <= @mouseWheelScreenRow < renderedEndRow)
         mouseWheelScreenRow = @mouseWheelScreenRow
 
-    className = 'editor editor-colors react'
+    className = 'editor-contents editor-colors'
     className += ' is-focused' if focused
+    className += ' has-selection' if hasSelection
 
     div className: className, style: {fontSize, lineHeight, fontFamily}, tabIndex: -1,
       GutterComponent {
         ref: 'gutter', editor, renderedRowRange, maxLineNumberDigits, scrollTop,
-        scrollHeight, lineHeightInPixels, @pendingChanges, mouseWheelScreenRow
+        scrollHeight, lineHeightInPixels, @pendingChanges, mouseWheelScreenRow,
+        decorations
       }
 
       div ref: 'scrollView', className: 'scroll-view', onMouseDown: @onMouseDown,
@@ -138,6 +142,7 @@ EditorComponent = React.createClass
     @pendingChanges = []
     @props.editor.manageScrollPosition = true
     @observeConfig()
+    @setScrollSensitivity(atom.config.get('editor.scrollSensitivity'))
 
   componentDidMount: ->
     {editor} = @props
@@ -161,14 +166,16 @@ EditorComponent = React.createClass
     window.removeEventListener('resize', @onWindowResize)
 
   componentWillUpdate: ->
-    @props.parentView.trigger 'cursor:moved' if @cursorsMoved
+    if @props.editor.isAlive()
+      @props.parentView.trigger 'cursor:moved' if @cursorsMoved
+      @props.parentView.trigger 'selection:changed' if @selectionChanged
 
   componentDidUpdate: (prevProps, prevState) ->
     @pendingChanges.length = 0
     @refreshingScrollbars = false
+    @updateParentViewFocusedClassIfNeeded(prevState)
     @measureScrollbars() if @measuringScrollbars
     @measureLineHeightAndCharWidthsIfNeeded(prevState)
-    @pauseOverflowChangedEvents()
     @props.parentView.trigger 'editor:display-updated'
 
   requestUpdate: ->
@@ -225,6 +232,18 @@ EditorComponent = React.createClass
 
     selectionScreenRanges
 
+  getGutterDecorations:  (renderedRowRange) ->
+    {editor} = @props
+    [renderedStartRow, renderedEndRow] = renderedRowRange
+
+    bufferRows = editor.bufferRowsForScreenRows(renderedStartRow, renderedEndRow - 1)
+
+    decorations = {}
+    for bufferRow in bufferRows
+      decorations[bufferRow] = editor.decorationsForBufferRow(bufferRow, 'gutter')
+      decorations[bufferRow].push {class: 'foldable'} if editor.isFoldableAtBufferRow(bufferRow)
+    decorations
+
   observeEditor: ->
     {editor} = @props
     @subscribe editor, 'batched-updates-started', @onBatchedUpdatesStarted
@@ -233,6 +252,7 @@ EditorComponent = React.createClass
     @subscribe editor, 'cursors-moved', @onCursorsMoved
     @subscribe editor, 'selection-removed selection-screen-range-changed', @onSelectionChanged
     @subscribe editor, 'selection-added', @onSelectionAdded
+    @subscribe editor, 'decoration-changed', @onDecorationChanged
     @subscribe editor.$scrollTop.changes, @onScrollTopChanged
     @subscribe editor.$scrollLeft.changes, @requestUpdate
     @subscribe editor.$height.changes, @requestUpdate
@@ -286,6 +306,8 @@ EditorComponent = React.createClass
       'editor:move-to-beginning-of-next-word': => editor.moveCursorToBeginningOfNextWord()
       'editor:move-to-previous-word-boundary': => editor.moveCursorToPreviousWordBoundary()
       'editor:move-to-next-word-boundary': => editor.moveCursorToNextWordBoundary()
+      'editor:select-to-beginning-of-next-paragraph': => editor.selectToBeginningOfNextParagraph()
+      'editor:select-to-beginning-of-previous-paragraph': => editor.selectToBeginningOfPreviousParagraph()
       'editor:select-to-end-of-line': => editor.selectToEndOfLine()
       'editor:select-to-beginning-of-line': => editor.selectToBeginningOfLine()
       'editor:select-to-end-of-word': => editor.selectToEndOfWord()
@@ -363,6 +385,7 @@ EditorComponent = React.createClass
     @subscribe atom.config.observe 'editor.showIndentGuide', @setShowIndentGuide
     @subscribe atom.config.observe 'editor.invisibles', @setInvisibles
     @subscribe atom.config.observe 'editor.showInvisibles', @setShowInvisibles
+    @subscribe atom.config.observe 'editor.scrollSensitivity', @setScrollSensitivity
 
   onFocus: ->
     @refs.input.focus()
@@ -405,10 +428,10 @@ EditorComponent = React.createClass
     {wheelDeltaX, wheelDeltaY} = event
     if Math.abs(wheelDeltaX) > Math.abs(wheelDeltaY)
       # Scrolling horizontally
-      @pendingHorizontalScrollDelta -= wheelDeltaX
+      @pendingHorizontalScrollDelta -= Math.round(wheelDeltaX * @scrollSensitivity)
     else
       # Scrolling vertically
-      @pendingVerticalScrollDelta -= wheelDeltaY
+      @pendingVerticalScrollDelta -= Math.round(wheelDeltaY * @scrollSensitivity)
       @mouseWheelScreenRow = @screenRowForNode(event.target)
       @clearMouseWheelScreenRowAfterDelay ?= debounce(@clearMouseWheelScreenRow, @mouseWheelScreenRowClearDelay)
       @clearMouseWheelScreenRowAfterDelay()
@@ -422,10 +445,7 @@ EditorComponent = React.createClass
         @pendingHorizontalScrollDelta = 0
 
   onScrollViewOverflowChanged: ->
-    if @overflowChangedEventsPaused
-      @overflowChangedWhilePaused = true
-    else
-      @requestScrollViewMeasurement()
+    @requestScrollViewMeasurement()
 
   onWindowResize: ->
     @requestScrollViewMeasurement()
@@ -437,6 +457,8 @@ EditorComponent = React.createClass
     scrollViewNode.scrollLeft = 0
 
   onInput: (char, replaceLastCharacter) ->
+    return unless @inputEnabled
+
     {editor} = @props
 
     if replaceLastCharacter
@@ -501,6 +523,8 @@ EditorComponent = React.createClass
     @onStoppedScrollingAfterDelay()
 
   onStoppedScrolling: ->
+    return unless @isMounted()
+
     @scrollingVertically = false
     @mouseWheelScreenRow = null
     @requestUpdate()
@@ -509,6 +533,12 @@ EditorComponent = React.createClass
 
   onCursorsMoved: ->
     @cursorsMoved = true
+    @requestUpdate()
+
+  onDecorationChanged: ->
+    @decorationChangedImmediate ?= setImmediate =>
+      @requestUpdate() if @isMounted()
+      @decorationChangedImmediate = null
 
   selectToMousePositionUntilMouseUp: (event) ->
     {editor} = @props
@@ -641,18 +671,6 @@ EditorComponent = React.createClass
     # if the editor's content and dimensions require them to be visible.
     @requestUpdate()
 
-  pauseOverflowChangedEvents: ->
-    @overflowChangedEventsPaused = true
-    @resumeOverflowChangedEventsAfterDelay ?= debounce(@resumeOverflowChangedEvents, 500)
-    @resumeOverflowChangedEventsAfterDelay()
-
-  resumeOverflowChangedEvents: ->
-    if @overflowChangedWhilePaused
-      @overflowChangedWhilePaused = false
-      @requestScrollViewMeasurement()
-
-  resumeOverflowChangedEventsAfterDelay: null
-
   clearMouseWheelScreenRow: ->
     if @mouseWheelScreenRow?
       @mouseWheelScreenRow = null
@@ -679,6 +697,71 @@ EditorComponent = React.createClass
 
   show: ->
     @setState(visible: true)
+
+  getFontSize: ->
+    @state.fontSize
+
+  setFontSize: (fontSize) ->
+    @setState({fontSize})
+
+  getFontFamily: ->
+    @state.fontFamily
+
+  setFontFamily: (fontFamily) ->
+    @setState({fontFamily})
+
+  setLineHeight: (lineHeight) ->
+    @setState({lineHeight})
+
+  setShowIndentGuide: (showIndentGuide) ->
+    @setState({showIndentGuide})
+
+  # Public: Defines which characters are invisible.
+  #
+  # invisibles - An {Object} defining the invisible characters:
+  #   :eol   - The end of line invisible {String} (default: `\u00ac`).
+  #   :space - The space invisible {String} (default: `\u00b7`).
+  #   :tab   - The tab invisible {String} (default: `\u00bb`).
+  #   :cr    - The carriage return invisible {String} (default: `\u00a4`).
+  setInvisibles: (invisibles={}) ->
+    defaults invisibles,
+      eol: '\u00ac'
+      space: '\u00b7'
+      tab: '\u00bb'
+      cr: '\u00a4'
+
+    @setState({invisibles})
+
+  setShowInvisibles: (showInvisibles) ->
+    @setState({showInvisibles})
+
+  setScrollSensitivity: (scrollSensitivity) ->
+    if scrollSensitivity = parseInt(scrollSensitivity)
+      @scrollSensitivity = Math.abs(scrollSensitivity) / 100
+
+  screenPositionForMouseEvent: (event) ->
+    pixelPosition = @pixelPositionForMouseEvent(event)
+    @props.editor.screenPositionForPixelPosition(pixelPosition)
+
+  pixelPositionForMouseEvent: (event) ->
+    {editor} = @props
+    {clientX, clientY} = event
+
+    scrollViewClientRect = @refs.scrollView.getDOMNode().getBoundingClientRect()
+    top = clientY - scrollViewClientRect.top + editor.getScrollTop()
+    left = clientX - scrollViewClientRect.left + editor.getScrollLeft()
+    {top, left}
+
+  getModel: ->
+    @props.editor
+
+  isInputEnabled: -> @inputEnabled
+
+  setInputEnabled: (@inputEnabled) -> @inputEnabled
+
+  updateParentViewFocusedClassIfNeeded: (prevState) ->
+    if prevState.focused isnt @state.focused
+      @props.parentView.toggleClass('is-focused', @props.focused)
 
   runScrollBenchmark: ->
     unless process.env.NODE_ENV is 'production'
@@ -714,47 +797,3 @@ EditorComponent = React.createClass
                   ReactPerf.printExclusive()
                   console.log "Wasted"
                   ReactPerf.printWasted()
-
-  setFontSize: (fontSize) ->
-    @setState({fontSize})
-
-  setLineHeight: (lineHeight) ->
-    @setState({lineHeight})
-
-  setFontFamily: (fontFamily) ->
-    @setState({fontFamily})
-
-  setShowIndentGuide: (showIndentGuide) ->
-    @setState({showIndentGuide})
-
-  # Public: Defines which characters are invisible.
-  #
-  # invisibles - An {Object} defining the invisible characters:
-  #   :eol   - The end of line invisible {String} (default: `\u00ac`).
-  #   :space - The space invisible {String} (default: `\u00b7`).
-  #   :tab   - The tab invisible {String} (default: `\u00bb`).
-  #   :cr    - The carriage return invisible {String} (default: `\u00a4`).
-  setInvisibles: (invisibles={}) ->
-    defaults invisibles,
-      eol: '\u00ac'
-      space: '\u00b7'
-      tab: '\u00bb'
-      cr: '\u00a4'
-
-    @setState({invisibles})
-
-  setShowInvisibles: (showInvisibles) ->
-    @setState({showInvisibles})
-
-  screenPositionForMouseEvent: (event) ->
-    pixelPosition = @pixelPositionForMouseEvent(event)
-    @props.editor.screenPositionForPixelPosition(pixelPosition)
-
-  pixelPositionForMouseEvent: (event) ->
-    {editor} = @props
-    {clientX, clientY} = event
-
-    scrollViewClientRect = @refs.scrollView.getDOMNode().getBoundingClientRect()
-    top = clientY - scrollViewClientRect.top + editor.getScrollTop()
-    left = clientX - scrollViewClientRect.left + editor.getScrollLeft()
-    {top, left}

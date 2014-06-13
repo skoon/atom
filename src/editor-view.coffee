@@ -56,6 +56,7 @@ class EditorView extends View
     softWrap: false
     softTabs: true
     softWrapAtPreferredLineLength: false
+    scrollSensitivity: 40
 
   @nextEditorId: 1
 
@@ -171,6 +172,8 @@ class EditorView extends View
       'editor:move-to-beginning-of-next-word': => @editor.moveCursorToBeginningOfNextWord()
       'editor:move-to-previous-word-boundary': => @editor.moveCursorToPreviousWordBoundary()
       'editor:move-to-next-word-boundary': => @editor.moveCursorToNextWordBoundary()
+      'editor:select-to-beginning-of-next-paragraph': => @editor.selectToBeginningOfNextParagraph()
+      'editor:select-to-beginning-of-previous-paragraph': => @editor.selectToBeginningOfPreviousParagraph()
       'editor:select-to-end-of-line': => @editor.selectToEndOfLine()
       'editor:select-to-beginning-of-line': => @editor.selectToBeginningOfLine()
       'editor:select-to-end-of-word': => @editor.selectToEndOfWord()
@@ -280,7 +283,7 @@ class EditorView extends View
     @editor.moveCursorUp(@getPageRows())
     @scrollTop(newScrollTop,  adjustVerticalScrollbar: true)
 
-  # Public: Gets the number of actual page rows existing in an editor.
+  # Gets the number of actual page rows existing in an editor.
   #
   # Returns a {Number}.
   getPageRows: ->
@@ -564,7 +567,7 @@ class EditorView extends View
       @scrollTop(scrollTop)
 
     @subscribe @editor, 'scroll-left-changed', (scrollLeft) =>
-      @scrollLeft(scrollLeft)
+      @scrollView.scrollLeft(scrollLeft)
 
     @subscribe @editor, 'soft-wrap-changed', (softWrap) =>
       @setSoftWrap(softWrap)

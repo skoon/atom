@@ -165,7 +165,7 @@ describe "EditorComponent", ->
         beforeEach ->
           editor.setText "a line that wraps "
           editor.setSoftWrap(true)
-          node.style.width = 15 * charWidth + 'px'
+          node.style.width = 16 * charWidth + 'px'
           component.measureScrollView()
 
         it "doesn't show end of line invisibles at the end of wrapped lines", ->
@@ -227,7 +227,19 @@ describe "EditorComponent", ->
         else
           [node]
 
+    describe "when the buffer contains null bytes", ->
+      it "excludes the null byte from character measurement", ->
+        editor.setText("a\0b")
+        expect(editor.pixelPositionForScreenPosition([0, Infinity]).left).toEqual 2 * charWidth
+
   describe "gutter rendering", ->
+    [lineNumberHasClass, gutter] = []
+
+    beforeEach ->
+      {gutter} = component.refs
+      lineNumberHasClass = (screenRow, klass) ->
+        component.lineNumberNodeForScreenRow(screenRow).classList.contains(klass)
+
     it "renders the currently-visible line numbers", ->
       node.style.height = 4.5 * lineHeightInPixels + 'px'
       component.measureScrollView()
@@ -302,6 +314,267 @@ describe "EditorComponent", ->
       expect(component.lineNumberNodeForScreenRow(9).textContent).toBe "10"
       expect(gutterNode.offsetWidth).toBe initialGutterWidth
 
+    describe "fold decorations", ->
+      describe "rendering fold decorations", ->
+        it "adds the foldable class to line numbers when the line is foldable", ->
+          expect(lineNumberHasClass(0, 'foldable')).toBe true
+          expect(lineNumberHasClass(1, 'foldable')).toBe true
+          expect(lineNumberHasClass(2, 'foldable')).toBe false
+          expect(lineNumberHasClass(3, 'foldable')).toBe false
+          expect(lineNumberHasClass(4, 'foldable')).toBe true
+          expect(lineNumberHasClass(5, 'foldable')).toBe false
+
+        it "updates the foldable class on the correct line numbers when the foldable positions change", ->
+          editor.getBuffer().insert([0, 0], '\n')
+          expect(lineNumberHasClass(0, 'foldable')).toBe false
+          expect(lineNumberHasClass(1, 'foldable')).toBe true
+          expect(lineNumberHasClass(2, 'foldable')).toBe true
+          expect(lineNumberHasClass(3, 'foldable')).toBe false
+          expect(lineNumberHasClass(4, 'foldable')).toBe false
+          expect(lineNumberHasClass(5, 'foldable')).toBe true
+          expect(lineNumberHasClass(6, 'foldable')).toBe false
+
+        it "updates the foldable class on a line number that becomes foldable", ->
+          expect(lineNumberHasClass(11, 'foldable')).toBe false
+
+          editor.getBuffer().insert([11, 44], '\n    fold me')
+          expect(lineNumberHasClass(11, 'foldable')).toBe true
+
+          editor.undo()
+          expect(lineNumberHasClass(11, 'foldable')).toBe false
+
+        it "adds, updates and removes the folded class on the correct line number nodes", ->
+          editor.foldBufferRow(4)
+          expect(lineNumberHasClass(4, 'folded')).toBe true
+
+          editor.getBuffer().insert([0, 0], '\n')
+          expect(lineNumberHasClass(4, 'folded')).toBe false
+          expect(lineNumberHasClass(5, 'folded')).toBe true
+
+          editor.unfoldBufferRow(5)
+          expect(lineNumberHasClass(5, 'folded')).toBe false
+
+      describe "mouse interactions with fold indicators", ->
+        [gutterNode] = []
+
+        buildClickEvent = (target) ->
+          buildMouseEvent('click', {target})
+
+        beforeEach ->
+          gutterNode = node.querySelector('.gutter')
+
+        it "folds and unfolds the block represented by the fold indicator when clicked", ->
+          expect(lineNumberHasClass(1, 'folded')).toBe false
+
+          lineNumber = component.lineNumberNodeForScreenRow(1)
+          target = lineNumber.querySelector('.icon-right')
+
+          target.dispatchEvent(buildClickEvent(target))
+          expect(lineNumberHasClass(1, 'folded')).toBe true
+
+          lineNumber = component.lineNumberNodeForScreenRow(1)
+          target = lineNumber.querySelector('.icon-right')
+
+          target.dispatchEvent(buildClickEvent(target))
+          expect(lineNumberHasClass(1, 'folded')).toBe false
+
+        it "does not fold when the line number node is clicked", ->
+          lineNumber = component.lineNumberNodeForScreenRow(1)
+          lineNumber.dispatchEvent(buildClickEvent(lineNumber))
+          expect(lineNumberHasClass(1, 'folded')).toBe false
+
+    describe "cursor-line decorations", ->
+      cursor = null
+      beforeEach ->
+        cursor = editor.getCursor()
+
+      it "modifies the cursor-line decoration when the cursor moves", ->
+        cursor.setScreenPosition([0, 0])
+        expect(lineNumberHasClass(0, 'cursor-line')).toBe true
+
+        cursor.setScreenPosition([1, 0])
+        expect(lineNumberHasClass(0, 'cursor-line')).toBe false
+        expect(lineNumberHasClass(1, 'cursor-line')).toBe true
+
+      it "updates cursor-line decorations for multiple cursors", ->
+        cursor.setScreenPosition([2, 0])
+        cursor2 = editor.addCursorAtScreenPosition([8, 0])
+        cursor3 = editor.addCursorAtScreenPosition([10, 0])
+
+        expect(lineNumberHasClass(2, 'cursor-line')).toBe true
+        expect(lineNumberHasClass(8, 'cursor-line')).toBe true
+        expect(lineNumberHasClass(10, 'cursor-line')).toBe true
+
+        cursor2.destroy()
+        expect(lineNumberHasClass(2, 'cursor-line')).toBe true
+        expect(lineNumberHasClass(8, 'cursor-line')).toBe false
+        expect(lineNumberHasClass(10, 'cursor-line')).toBe true
+
+        cursor3.destroy()
+        expect(lineNumberHasClass(2, 'cursor-line')).toBe true
+        expect(lineNumberHasClass(8, 'cursor-line')).toBe false
+        expect(lineNumberHasClass(10, 'cursor-line')).toBe false
+
+      it "adds cursor-line decorations to multiple lines when a selection is performed", ->
+        cursor.setScreenPosition([1, 0])
+        editor.selectDown(2)
+        expect(lineNumberHasClass(0, 'cursor-line')).toBe false
+        expect(lineNumberHasClass(1, 'cursor-line')).toBe true
+        expect(lineNumberHasClass(2, 'cursor-line')).toBe true
+        expect(lineNumberHasClass(3, 'cursor-line')).toBe true
+        expect(lineNumberHasClass(4, 'cursor-line')).toBe false
+
+    describe "when decorations are used", ->
+      describe "when decorations are applied to buffer rows", ->
+        it "renders line number classes based on the decorations on their buffer row", ->
+          node.style.height = 4.5 * lineHeightInPixels + 'px'
+          component.measureScrollView()
+
+          expect(component.lineNumberNodeForScreenRow(9)).not.toBeDefined()
+
+          editor.addDecorationToBufferRow(9, type: 'gutter', class: 'fancy-class')
+          editor.addDecorationToBufferRow(9, type: 'someother-type', class: 'nope-class')
+
+          verticalScrollbarNode.scrollTop = 2.5 * lineHeightInPixels
+          verticalScrollbarNode.dispatchEvent(new UIEvent('scroll'))
+
+          expect(lineNumberHasClass(9, 'fancy-class')).toBe true
+          expect(lineNumberHasClass(9, 'nope-class')).toBe false
+
+        it "renders updates to gutter decorations", ->
+          editor.addDecorationToBufferRow(2, type: 'gutter', class: 'fancy-class')
+          editor.addDecorationToBufferRow(2, type: 'someother-type', class: 'nope-class')
+
+          waitsFor -> not component.decorationChangedImmediate?
+          runs ->
+            expect(lineNumberHasClass(2, 'fancy-class')).toBe true
+            expect(lineNumberHasClass(2, 'nope-class')).toBe false
+
+            editor.removeDecorationFromBufferRow(2, type: 'gutter', class: 'fancy-class')
+            editor.removeDecorationFromBufferRow(2, type: 'someother-type', class: 'nope-class')
+
+          waitsFor -> not component.decorationChangedImmediate?
+          runs ->
+            expect(lineNumberHasClass(2, 'fancy-class')).toBe false
+            expect(lineNumberHasClass(2, 'nope-class')).toBe false
+
+        it "renders decorations on soft-wrapped line numbers when softWrap is true", ->
+          editor.addDecorationToBufferRow(1, type: 'gutter', class: 'no-wrap')
+          editor.addDecorationToBufferRow(1, type: 'gutter', class: 'wrap-me', softWrap: true)
+
+          editor.setSoftWrap(true)
+          node.style.height = 4.5 * lineHeightInPixels + 'px'
+          node.style.width = 30 * charWidth + 'px'
+          component.measureScrollView()
+
+          expect(lineNumberHasClass(2, 'no-wrap')).toBe true
+          expect(lineNumberHasClass(2, 'wrap-me')).toBe true
+          expect(lineNumberHasClass(3, 'no-wrap')).toBe false
+          expect(lineNumberHasClass(3, 'wrap-me')).toBe true
+
+          # should remove the wrapped decorations
+          editor.removeDecorationFromBufferRow(1, type: 'gutter', class: 'no-wrap')
+          editor.removeDecorationFromBufferRow(1, type: 'gutter', class: 'wrap-me')
+
+          waitsFor -> not component.decorationChangedImmediate?
+          runs ->
+            expect(lineNumberHasClass(2, 'no-wrap')).toBe false
+            expect(lineNumberHasClass(2, 'wrap-me')).toBe false
+            expect(lineNumberHasClass(3, 'no-wrap')).toBe false
+            expect(lineNumberHasClass(3, 'wrap-me')).toBe false
+
+            # should add them back when the nodes are not recreated
+            editor.addDecorationToBufferRow(1, type: 'gutter', class: 'no-wrap')
+            editor.addDecorationToBufferRow(1, type: 'gutter', class: 'wrap-me', softWrap: true)
+
+          waitsFor -> not component.decorationChangedImmediate?
+          runs ->
+            expect(lineNumberHasClass(2, 'no-wrap')).toBe true
+            expect(lineNumberHasClass(2, 'wrap-me')).toBe true
+            expect(lineNumberHasClass(3, 'no-wrap')).toBe false
+            expect(lineNumberHasClass(3, 'wrap-me')).toBe true
+
+      describe "when decorations are applied to markers", ->
+        {marker, decoration} = {}
+        beforeEach ->
+          marker = editor.displayBuffer.markBufferRange([[2, 13], [3, 15]], class: 'my-marker', invalidate: 'inside')
+          decoration = {type: 'gutter', class: 'someclass'}
+          editor.addDecorationForMarker(marker, decoration)
+          waitsFor -> not component.decorationChangedImmediate?
+
+        it "updates line number classes when the marker moves", ->
+          expect(lineNumberHasClass(1, 'someclass')).toBe false
+          expect(lineNumberHasClass(2, 'someclass')).toBe true
+          expect(lineNumberHasClass(3, 'someclass')).toBe true
+          expect(lineNumberHasClass(4, 'someclass')).toBe false
+
+          editor.getBuffer().insert([0, 0], '\n')
+
+          waitsFor -> not component.decorationChangedImmediate?
+          runs ->
+            expect(lineNumberHasClass(2, 'someclass')).toBe false
+            expect(lineNumberHasClass(3, 'someclass')).toBe true
+            expect(lineNumberHasClass(4, 'someclass')).toBe true
+            expect(lineNumberHasClass(5, 'someclass')).toBe false
+
+            editor.getBuffer().deleteRows(0, 1)
+
+          waitsFor -> not component.decorationChangedImmediate?
+          runs ->
+            expect(lineNumberHasClass(0, 'someclass')).toBe false
+            expect(lineNumberHasClass(1, 'someclass')).toBe true
+            expect(lineNumberHasClass(2, 'someclass')).toBe true
+            expect(lineNumberHasClass(3, 'someclass')).toBe false
+
+        it "removes line number classes when a decoration's marker is invalidated", ->
+          editor.getBuffer().insert([3, 2], 'n')
+
+          waitsFor -> not component.decorationChangedImmediate?
+          runs ->
+
+            expect(marker.isValid()).toBe false
+            expect(lineNumberHasClass(1, 'someclass')).toBe false
+            expect(lineNumberHasClass(2, 'someclass')).toBe false
+            expect(lineNumberHasClass(3, 'someclass')).toBe false
+            expect(lineNumberHasClass(4, 'someclass')).toBe false
+
+            editor.getBuffer().undo()
+
+          waitsFor -> not component.decorationChangedImmediate?
+          runs ->
+            expect(marker.isValid()).toBe true
+            expect(lineNumberHasClass(1, 'someclass')).toBe false
+            expect(lineNumberHasClass(2, 'someclass')).toBe true
+            expect(lineNumberHasClass(3, 'someclass')).toBe true
+            expect(lineNumberHasClass(4, 'someclass')).toBe false
+
+        it "removes the classes and unsubscribes from the marker when decoration is removed", ->
+          editor.removeDecorationForMarker(marker, decoration)
+
+          waitsFor -> not component.decorationChangedImmediate?
+          runs ->
+            expect(lineNumberHasClass(1, 'someclass')).toBe false
+            expect(lineNumberHasClass(2, 'someclass')).toBe false
+            expect(lineNumberHasClass(3, 'someclass')).toBe false
+            expect(lineNumberHasClass(4, 'someclass')).toBe false
+
+          editor.getBuffer().insert([0, 0], '\n')
+
+          waitsFor -> not component.decorationChangedImmediate?
+          runs ->
+            expect(lineNumberHasClass(2, 'someclass')).toBe false
+            expect(lineNumberHasClass(3, 'someclass')).toBe false
+
+        it "removes the line number classes when the decoration's marker is destroyed", ->
+          marker.destroy()
+
+          waitsFor -> not component.decorationChangedImmediate?
+          runs ->
+            expect(lineNumberHasClass(1, 'someclass')).toBe false
+            expect(lineNumberHasClass(2, 'someclass')).toBe false
+            expect(lineNumberHasClass(3, 'someclass')).toBe false
+            expect(lineNumberHasClass(4, 'someclass')).toBe false
+
   describe "cursor rendering", ->
     it "renders the currently visible cursors, translated relative to the scroll position", ->
       cursor1 = editor.getCursor()
@@ -356,6 +629,16 @@ describe "EditorComponent", ->
 
       expect(cursorRect.left).toBe rangeRect.left
       expect(cursorRect.width).toBe rangeRect.width
+
+    it "sets the cursor to the default character width at the end of a line", ->
+      editor.setCursorScreenPosition([0, Infinity])
+      cursorNode = node.querySelector('.cursor')
+      expect(cursorNode.offsetWidth).toBe charWidth
+
+    it "gives the cursor a non-zero width even if it's inside atomic tokens", ->
+      editor.setCursorScreenPosition([1, 0])
+      cursorNode = node.querySelector('.cursor')
+      expect(cursorNode.offsetWidth).toBe charWidth
 
     it "blinks cursors when they aren't moving", ->
       spyOn(_._, 'now').andCallFake -> window.now # Ensure _.debounce is based on our fake spec timeline
@@ -630,12 +913,6 @@ describe "EditorComponent", ->
       clientY = scrollViewClientRect.top + positionOffset.top - editor.getScrollTop()
       {clientX, clientY}
 
-    buildMouseEvent = (type, properties...) ->
-      properties = extend({bubbles: true, cancelable: true}, properties...)
-      event = new MouseEvent(type, properties)
-      Object.defineProperty(event, 'which', get: -> properties.which) if properties.which?
-      event
-
   describe "focus handling", ->
     inputNode = null
 
@@ -651,8 +928,26 @@ describe "EditorComponent", ->
       expect(document.activeElement).toBe document.body
       inputNode.focus()
       expect(node.classList.contains('is-focused')).toBe true
+      expect(wrapperView.hasClass('is-focused')).toBe true
       inputNode.blur()
       expect(node.classList.contains('is-focused')).toBe false
+      expect(wrapperView.hasClass('is-focused')).toBe false
+
+  describe "selection handling", ->
+    cursor = null
+
+    beforeEach ->
+      cursor = editor.getCursor()
+      cursor.setScreenPosition([0, 0])
+
+    it "adds the 'has-selection' class to the editor when there is a selection", ->
+      expect(node.classList.contains('has-selection')).toBe false
+
+      editor.selectDown()
+      expect(node.classList.contains('has-selection')).toBe true
+
+      cursor.moveDown()
+      expect(node.classList.contains('has-selection')).toBe false
 
   describe "scrolling", ->
     it "updates the vertical scrollbar when the scrollTop is changed in the model", ->
@@ -787,24 +1082,47 @@ describe "EditorComponent", ->
 
       expect(horizontalScrollbarNode.scrollWidth).toBe gutterNode.offsetWidth + editor.getScrollWidth()
 
-    describe "when a mousewheel event occurs on the editor", ->
-
   describe "mousewheel events", ->
-    it "updates the scrollLeft or scrollTop on mousewheel events depending on which delta is greater (x or y)", ->
-      node.style.height = 4.5 * lineHeightInPixels + 'px'
-      node.style.width = 20 * charWidth + 'px'
-      component.measureScrollView()
+    beforeEach ->
+      atom.config.set('editor.scrollSensitivity', 100)
 
-      expect(verticalScrollbarNode.scrollTop).toBe 0
-      expect(horizontalScrollbarNode.scrollLeft).toBe 0
+    describe "updating scrollTop and scrollLeft", ->
+      beforeEach ->
+        node.style.height = 4.5 * lineHeightInPixels + 'px'
+        node.style.width = 20 * charWidth + 'px'
+        component.measureScrollView()
 
-      node.dispatchEvent(new WheelEvent('mousewheel', wheelDeltaX: -5, wheelDeltaY: -10))
-      expect(verticalScrollbarNode.scrollTop).toBe 10
-      expect(horizontalScrollbarNode.scrollLeft).toBe 0
+      it "updates the scrollLeft or scrollTop on mousewheel events depending on which delta is greater (x or y)", ->
+        expect(verticalScrollbarNode.scrollTop).toBe 0
+        expect(horizontalScrollbarNode.scrollLeft).toBe 0
 
-      node.dispatchEvent(new WheelEvent('mousewheel', wheelDeltaX: -15, wheelDeltaY: -5))
-      expect(verticalScrollbarNode.scrollTop).toBe 10
-      expect(horizontalScrollbarNode.scrollLeft).toBe 15
+        node.dispatchEvent(new WheelEvent('mousewheel', wheelDeltaX: -5, wheelDeltaY: -10))
+        expect(verticalScrollbarNode.scrollTop).toBe 10
+        expect(horizontalScrollbarNode.scrollLeft).toBe 0
+
+        node.dispatchEvent(new WheelEvent('mousewheel', wheelDeltaX: -15, wheelDeltaY: -5))
+        expect(verticalScrollbarNode.scrollTop).toBe 10
+        expect(horizontalScrollbarNode.scrollLeft).toBe 15
+
+      it "updates the scrollLeft or scrollTop according to the scroll sensitivity", ->
+        atom.config.set('editor.scrollSensitivity', 50)
+        node.dispatchEvent(new WheelEvent('mousewheel', wheelDeltaX: -5, wheelDeltaY: -10))
+        expect(verticalScrollbarNode.scrollTop).toBe 5
+        expect(horizontalScrollbarNode.scrollLeft).toBe 0
+
+        node.dispatchEvent(new WheelEvent('mousewheel', wheelDeltaX: -15, wheelDeltaY: -5))
+        expect(verticalScrollbarNode.scrollTop).toBe 5
+        expect(horizontalScrollbarNode.scrollLeft).toBe 7
+
+      it "uses the previous scrollSensitivity when the value is not an int", ->
+        atom.config.set('editor.scrollSensitivity', 'nope')
+        node.dispatchEvent(new WheelEvent('mousewheel', wheelDeltaX: 0, wheelDeltaY: -10))
+        expect(verticalScrollbarNode.scrollTop).toBe 10
+
+      it "parses negative scrollSensitivity values as positive", ->
+        atom.config.set('editor.scrollSensitivity', -50)
+        node.dispatchEvent(new WheelEvent('mousewheel', wheelDeltaX: 0, wheelDeltaY: -10))
+        expect(verticalScrollbarNode.scrollTop).toBe 5
 
     describe "when the mousewheel event's target is a line", ->
       it "keeps the line on the DOM if it is scrolled off-screen", ->
@@ -899,6 +1217,12 @@ describe "EditorComponent", ->
       inputNode.dispatchEvent(new Event('input'))
       expect(editor.lineForBufferRow(0)).toBe 'üvar quicksort = function () {'
 
+    it "does not handle input events when input is disabled", ->
+      component.setInputEnabled(false)
+      inputNode.value = 'x'
+      inputNode.dispatchEvent(new Event('input'))
+      expect(editor.lineForBufferRow(0)).toBe 'var quicksort = function () {'
+
   describe "commands", ->
     describe "editor:consolidate-selections", ->
       it "consolidates selections on the editor model, aborting the key binding if there is only one selection", ->
@@ -940,3 +1264,12 @@ describe "EditorComponent", ->
         editor.setCursorBufferPosition([0, Infinity])
         wrapperView.show()
         expect(node.querySelector('.cursor').style['-webkit-transform']).toBe "translate3d(#{9 * charWidth}px, 0px, 0px)"
+
+  buildMouseEvent = (type, properties...) ->
+    properties = extend({bubbles: true, cancelable: true}, properties...)
+    event = new MouseEvent(type, properties)
+    Object.defineProperty(event, 'which', get: -> properties.which) if properties.which?
+    if properties.target?
+      Object.defineProperty(event, 'target', get: -> properties.target)
+      Object.defineProperty(event, 'srcObject', get: -> properties.target)
+    event

@@ -39,7 +39,8 @@ module.exports = (grunt) ->
       grunt.verbose.writeln "Launching #{path.basename(packagePath)} specs."
       spawn options, (error, results, code) ->
         if process.platform is 'win32'
-          process.stderr.write(fs.readFileSync(path.join(packagePath, 'ci.log')))
+          if error
+            process.stderr.write(fs.readFileSync(path.join(packagePath, 'ci.log')))
           fs.unlinkSync(path.join(packagePath, 'ci.log'))
 
         failedPackages.push path.basename(packagePath) if error
@@ -77,7 +78,7 @@ module.exports = (grunt) ->
 
     spawn options, (error, results, code) ->
       if process.platform is 'win32'
-        process.stderr.write(fs.readFileSync('ci.log'))
+        process.stderr.write(fs.readFileSync('ci.log')) if error
         fs.unlinkSync('ci.log')
       else
         # TODO: Restore concurrency on Windows
@@ -104,9 +105,4 @@ module.exports = (grunt) ->
       failures.push "atom core" if coreSpecFailed
 
       grunt.log.error("[Error]".red + " #{failures.join(', ')} spec(s) failed") if failures.length > 0
-
-      # TODO: Mark the build as green on Windows until specs pass.
-      if process.platform is 'darwin'
-        done(!coreSpecFailed and failedPackages.length == 0)
-      else if process.platform is 'win32'
-        done(true)
+      done(!coreSpecFailed and failedPackages.length == 0)

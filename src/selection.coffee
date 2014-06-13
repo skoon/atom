@@ -236,6 +236,16 @@ class Selection extends Model
   selectToNextWordBoundary: ->
     @modifySelection => @cursor.moveToNextWordBoundary()
 
+  # Public: Selects all the text from the current cursor position to the
+  # beginning of the next paragraph.
+  selectToBeginningOfNextParagraph: ->
+    @modifySelection => @cursor.moveToBeginningOfNextParagraph()
+
+  # Public: Selects all the text from the current cursor position to the
+  # beginning of the previous paragraph.
+  selectToBeginningOfPreviousParagraph: ->
+    @modifySelection => @cursor.moveToBeginningOfPreviousParagraph()
+
   # Public: Moves the selection down one row.
   addSelectionBelow: ->
     range = (@getGoalBufferRange() ? @getBufferRange()).copy()
@@ -485,7 +495,7 @@ class Selection extends Model
   outdentSelectedRows: ->
     [start, end] = @getBufferRowRange()
     buffer = @editor.buffer
-    leadingTabRegex = new RegExp("^ {1,#{@editor.getTabLength()}}|\t")
+    leadingTabRegex = new RegExp("^( {1,#{@editor.getTabLength()}}|\t)")
     for row in [start..end]
       if matchLength = buffer.lineForRow(row).match(leadingTabRegex)?[0].length
         buffer.delete [[row, 0], [row, matchLength]]
